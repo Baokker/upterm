@@ -60,14 +60,23 @@ func (c *command) Start(ctx context.Context) (*pty, error) {
 
 	var err error
 	// 如果输入的是一个'rm'指令，就拒绝执行该命令，输出禁止的提示
+	fmt.Println("c.name:", c.name)
+	fmt.Println("c.args:", c.args)
+	fmt.Println("c.cmd:", c.cmd)
 	if c.name == "echo rm" {
 		//_, err = c.stdin.WriteString("command not allowed!\n")
 		//return nil, fmt.Errorf("command not allowed")
+		fmt.Println("command not allowed!")
 		_, err = c.cmd.Stdout.Write([]byte("command not allowed!\n"))
 		return nil, fmt.Errorf("command not allowed")
 	}
 
+	// log1
+	fmt.Println("command allowed1!")
 	_, err = c.cmd.Stdout.Write([]byte("command allowed1!\n"))
+
+	// log2
+	fmt.Println("command allowed2!")
 	_, err = c.stdout.Write([]byte("command allowed2!\n"))
 
 	c.ptmx, err = startPty(c.cmd)
