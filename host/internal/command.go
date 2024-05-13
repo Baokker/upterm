@@ -59,6 +59,12 @@ func (c *command) Start(ctx context.Context) (*pty, error) {
 	c.cmd.Env = append(c.env, os.Environ()...)
 
 	var err error
+	// 如果输入的是一个'rm'指令，就拒绝执行该命令，输出禁止的提示
+	if c.name == "echo rm" {
+		_, err = c.stdin.WriteString("command not allowed!\n")
+		return nil, fmt.Errorf("command not allowed")
+	}
+
 	c.ptmx, err = startPty(c.cmd)
 	if err != nil {
 		return nil, fmt.Errorf("unable to start pty: %w", err)
