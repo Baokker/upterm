@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/oklog/run"
@@ -77,6 +78,16 @@ func (c *command) Run() error {
 			return fmt.Errorf("unable to set terminal to raw mode: %w", err)
 		}
 		defer func() { _ = term.Restore(int(c.stdin.Fd()), oldState) }()
+	}
+
+	// 在执行命令前检查命令是否以"rm"开头
+	// 假设c.cmd.Path包含了要执行的命令名称
+	fmt.Println(c.cmd)
+	fmt.Println(c.cmd.Path)
+	if strings.HasPrefix(c.cmd.Path, "rm") {
+		// 如果是以"rm"开头，打印"not allowed"并返回错误
+		fmt.Println("Command not allowed!")
+		return fmt.Errorf("execution of 'rm' commands is not allowed")
 	}
 
 	var g run.Group
