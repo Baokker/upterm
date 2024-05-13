@@ -64,16 +64,9 @@ func (c *command) Start(ctx context.Context) (*pty, error) {
 	fmt.Println("c.args:", c.args)
 	fmt.Println("c.cmd:", c.cmd)
 	if c.name == "echo rm" {
-		//_, err = c.stdin.WriteString("command not allowed!\n")
-		//return nil, fmt.Errorf("command not allowed")
 		fmt.Println("command not allowed!")
-		_, err = c.cmd.Stdout.Write([]byte("command not allowed!\n"))
 		return nil, fmt.Errorf("command not allowed")
 	}
-
-	// log1
-	fmt.Println("command allowed1!")
-	_, err = c.cmd.Stdout.Write([]byte("command allowed1!\n"))
 
 	c.ptmx, err = startPty(c.cmd)
 	if err != nil {
