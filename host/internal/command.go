@@ -80,17 +80,6 @@ func (c *command) Run() error {
 		defer func() { _ = term.Restore(int(c.stdin.Fd()), oldState) }()
 	}
 
-	// 在执行命令前检查命令是否以"rm"开头
-	// 假设c.cmd.Path包含了要执行的命令名称
-	fmt.Println(c.cmd)
-	fmt.Println(c.cmd.Path)
-	fmt.Println("hello here")
-	if strings.HasPrefix(c.cmd.Path, "rm") {
-		// 如果是以"rm"开头，打印"not allowed"并返回错误
-		fmt.Println("Command not allowed!")
-		return fmt.Errorf("execution of 'rm' commands is not allowed")
-	}
-
 	var g run.Group
 	if isTty {
 		// pty
@@ -124,7 +113,11 @@ func (c *command) Run() error {
 		ctx, cancel := context.WithCancel(c.ctx)
 		g.Add(func() error {
 			_, err := io.Copy(c.ptmx, uio.NewContextReader(ctx, c.stdin))
-			fmt.Println("copying stdin, content: ", c.stdin)
+
+			// if the command includes "rm", cancel it
+			if strings.Contains(c.stdin.Name(), "rm") {
+				cancel()
+			}
 			return err
 		}, func(err error) {
 			cancel()
