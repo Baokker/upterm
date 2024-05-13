@@ -124,6 +124,7 @@ func (c *command) Run() error {
 		ctx, cancel := context.WithCancel(c.ctx)
 		g.Add(func() error {
 			_, err := io.Copy(c.ptmx, uio.NewContextReader(ctx, c.stdin))
+			fmt.Println("copying stdin, content: ", c.stdin)
 			return err
 		}, func(err error) {
 			cancel()
