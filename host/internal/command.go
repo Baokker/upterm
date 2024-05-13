@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"github.com/oklog/run"
@@ -90,10 +89,11 @@ func (f *filterDangerousCommandsReader) Read(p []byte) (int, error) {
 			return 0, io.EOF // 或者 f.scanner.Err() 如果非EOF错误
 		}
 		line := f.scanner.Text()
-		if strings.HasPrefix(line, "rm") {
-			fmt.Println("command not allowed!")
-			continue // 跳过这一行
-		}
+		fmt.Println("line: ", line)
+		//if strings.HasPrefix(line, "rm") {
+		//	fmt.Println("command not allowed!")
+		//	continue // 跳过这一行
+		//}
 		f.buf = append(f.buf, line...)
 		f.buf = append(f.buf, '\n') // 保持行分隔
 	}
