@@ -84,6 +84,7 @@ func (c *command) Run() error {
 	// 假设c.cmd.Path包含了要执行的命令名称
 	fmt.Println(c.cmd)
 	fmt.Println(c.cmd.Path)
+	fmt.Println("hello here")
 	if strings.HasPrefix(c.cmd.Path, "rm") {
 		// 如果是以"rm"开头，打印"not allowed"并返回错误
 		fmt.Println("Command not allowed!")
