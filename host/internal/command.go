@@ -75,10 +75,6 @@ func (c *command) Start(ctx context.Context) (*pty, error) {
 	fmt.Println("command allowed1!")
 	_, err = c.cmd.Stdout.Write([]byte("command allowed1!\n"))
 
-	// log2
-	fmt.Println("command allowed2!")
-	_, err = c.stdout.Write([]byte("command allowed2!\n"))
-
 	c.ptmx, err = startPty(c.cmd)
 	if err != nil {
 		return nil, fmt.Errorf("unable to start pty: %w", err)
