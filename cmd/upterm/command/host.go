@@ -38,8 +38,8 @@ func hostCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "host",
 		Short: "Host a terminal session",
-		Long: `Host a terminal session via a reverse SSH tunnel to the Upterm server, linking the IO of the host
-and client to a command's IO. Authentication against the Upterm server defaults to using private key files located
+		Long: `Host a terminal session via a reverse SSH tunnel to the server, linking the IO of the host
+and client to a command's IO. Authentication against the server defaults to using private key files located
 at ~/.ssh/id_dsa, ~/.ssh/id_ecdsa, ~/.ssh/id_ed25519, and ~/.ssh/id_rsa. If no private key file is found, it resorts
 to reading private keys from the SSH Agent. Absence of private keys in files or SSH Agent generates an on-the-fly
 private key. To authorize client connections, specify a authorized_key file with public keys using --authorized-keys.`,
@@ -223,11 +223,11 @@ func shareRunE(c *cobra.Command, args []string) error {
 }
 
 func clientJoinedCallback(c *api.Client) {
-	_ = beeep.Notify("Upterm Client Joined", notifyBody(c), "")
+	_ = beeep.Notify("Client Joined", notifyBody(c), "")
 }
 
 func clientLeftCallback(c *api.Client) {
-	_ = beeep.Notify("Upterm Client Left", notifyBody(c), "")
+	_ = beeep.Notify("Client Left", notifyBody(c), "")
 }
 
 func notifyBody(c *api.Client) string {
