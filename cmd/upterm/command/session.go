@@ -235,9 +235,9 @@ func displaySession(session *api.GetSessionResponse) error {
 
 	data := [][]string{
 		{"Command:", strings.Join(session.Command, " ")},
-		{"Force Command:", naIfEmpty(strings.Join(session.ForceCommand, " "))},
-		{"Host:", u.Scheme + "://" + hostPort},
-		{"Authorized Keys:", naIfEmpty(displayAuthorizedKeys(session.AuthorizedKeys))},
+		//{"Force Command:", naIfEmpty(strings.Join(session.ForceCommand, " "))},
+		//{"Host:", u.Scheme + "://" + hostPort},
+		//{"Authorized Keys:", naIfEmpty(displayAuthorizedKeys(session.AuthorizedKeys))},
 		{"SSH Session:", sshCmd},
 	}
 
