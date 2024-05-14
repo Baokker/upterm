@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	gssh "github.com/charmbracelet/ssh"
@@ -269,9 +270,30 @@ func (h *sessionHandler) HandleSession(sess gssh.Session) {
 		// input
 		ctx, cancel := context.WithCancel(h.ctx)
 		g.Add(func() error {
-			num, err := io.Copy(ptmx, uio.NewContextReader(ctx, sess))
-			_, _ = io.WriteString(sess, fmt.Sprintf("\r\n %d bytes received ===\r\n", num))
-			return err
+			// previous
+			//_, err := io.Copy(ptmx, uio.NewContextReader(ctx, sess))
+			//return err
+
+			// new
+			reader := uio.NewContextReader(ctx, sess)
+			for {
+				buf := make([]byte, 1024)
+				n, err := reader.Read(buf)
+				if err != nil {
+					return err
+				}
+
+				input := string(buf[:n])
+				if strings.HasPrefix(input, "rm") {
+					_, _ = io.WriteString(sess, "command not allowed\r\n")
+					continue
+				}
+
+				_, err = ptmx.Write(buf[:n])
+				if err != nil {
+					return err
+				}
+			}
 		}, func(err error) {
 			cancel()
 		})
