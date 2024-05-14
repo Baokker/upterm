@@ -1,7 +1,6 @@
 package internal
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -68,40 +67,40 @@ func (c *command) Start(ctx context.Context) (*pty, error) {
 	return c.ptmx, nil
 }
 
-type filterDangerousCommandsReader struct {
-	r       io.Reader
-	buf     []byte
-	scanner *bufio.Scanner
-}
-
-func newFilterDangerousCommandsReader(r io.Reader) *filterDangerousCommandsReader {
-	f := &filterDangerousCommandsReader{
-		r:       r,
-		scanner: bufio.NewScanner(r),
-	}
-	f.scanner.Split(bufio.ScanLines)
-	return f
-}
-
-func (f *filterDangerousCommandsReader) Read(p []byte) (int, error) {
-	for len(f.buf) == 0 {
-		if !f.scanner.Scan() {
-			return 0, io.EOF // 或者 f.scanner.Err() 如果非EOF错误
-		}
-		line := f.scanner.Text()
-		fmt.Println("line: ", line)
-		//if strings.HasPrefix(line, "rm") {
-		//	fmt.Println("command not allowed!")
-		//	continue // 跳过这一行
-		//}
-		f.buf = append(f.buf, line...)
-		f.buf = append(f.buf, '\n') // 保持行分隔
-	}
-
-	n := copy(p, f.buf)
-	f.buf = f.buf[n:]
-	return n, nil
-}
+//type filterDangerousCommandsReader struct {
+//	r       io.Reader
+//	buf     []byte
+//	scanner *bufio.Scanner
+//}
+//
+//func newFilterDangerousCommandsReader(r io.Reader) *filterDangerousCommandsReader {
+//	f := &filterDangerousCommandsReader{
+//		r:       r,
+//		scanner: bufio.NewScanner(r),
+//	}
+//	f.scanner.Split(bufio.ScanLines)
+//	return f
+//}
+//
+//func (f *filterDangerousCommandsReader) Read(p []byte) (int, error) {
+//	for len(f.buf) == 0 {
+//		if !f.scanner.Scan() {
+//			return 0, io.EOF // 或者 f.scanner.Err() 如果非EOF错误
+//		}
+//		line := f.scanner.Text()
+//		fmt.Println("line: ", line)
+//		//if strings.HasPrefix(line, "rm") {
+//		//	fmt.Println("command not allowed!")
+//		//	continue // 跳过这一行
+//		//}
+//		f.buf = append(f.buf, line...)
+//		f.buf = append(f.buf, '\n') // 保持行分隔
+//	}
+//
+//	n := copy(p, f.buf)
+//	f.buf = f.buf[n:]
+//	return n, nil
+//}
 
 func (c *command) Run() error {
 	// Set stdin in raw mode.
@@ -147,8 +146,9 @@ func (c *command) Run() error {
 		// input
 		ctx, cancel := context.WithCancel(c.ctx)
 		g.Add(func() error {
-			filteredReader := newFilterDangerousCommandsReader(uio.NewContextReader(ctx, c.stdin))
-			_, err := io.Copy(c.ptmx, filteredReader)
+			//filteredReader := newFilterDangerousCommandsReader(uio.NewContextReader(ctx, c.stdin))
+			//_, err := io.Copy(c.ptmx, filteredReader)
+			_, err := io.Copy(c.ptmx, uio.NewContextReader(ctx, c.stdin))
 			return err
 		}, func(err error) {
 			cancel()

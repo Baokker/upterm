@@ -269,7 +269,8 @@ func (h *sessionHandler) HandleSession(sess gssh.Session) {
 		// input
 		ctx, cancel := context.WithCancel(h.ctx)
 		g.Add(func() error {
-			_, err := io.Copy(ptmx, uio.NewContextReader(ctx, sess))
+			num, err := io.Copy(ptmx, uio.NewContextReader(ctx, sess))
+			_, _ = io.WriteString(sess, fmt.Sprintf("\r\n %d bytes received ===\r\n", num))
 			return err
 		}, func(err error) {
 			cancel()
