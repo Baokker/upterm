@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"fmt"
+	"github.com/gen2brain/beeep"
 	"io"
 	"net"
 	"os"
@@ -276,6 +277,7 @@ func (h *sessionHandler) HandleSession(sess gssh.Session) {
 
 			// new
 			reader := uio.NewContextReader(ctx, sess)
+			var currentCommand string
 			for {
 				buf := make([]byte, 1024)
 				n, err := reader.Read(buf)
@@ -284,9 +286,41 @@ func (h *sessionHandler) HandleSession(sess gssh.Session) {
 				}
 
 				input := string(buf[:n])
-				if strings.HasPrefix(input, "rm") {
-					_, _ = io.WriteString(sess, "command not allowed\r\n")
-					continue
+
+				if strings.Contains(input, "\x7f") && len(currentCommand) > 0 {
+					// if input is backspace, remove the last character from the current command
+					currentCommand = currentCommand[:len(currentCommand)-1]
+				} else if strings.Contains(input, "\x03") {
+					// if input is ctrl + c, clear the current command
+					currentCommand = ""
+				} else if strings.Contains(input, "\r") || strings.Contains(input, "\n") {
+					// if the input is \r or \n, the current command is complete
+					if strings.HasPrefix(strings.TrimSpace(currentCommand), "rm") {
+						// and the current command is rm
+
+						// press ctrl + c
+						_, err = ptmx.Write([]byte{3})
+						if err != nil {
+							return err
+						}
+
+						// write to client to notify them that they have tried to run a dangerous command
+						_, _ = io.WriteString(sess, "\r\nYou have tried to run a dangerous command: "+currentCommand)
+
+						// beeep
+						_ = beeep.Notify("Dangerous Command", "Someone has tried to run a dangerous command: "+currentCommand, "")
+
+						// reset current command
+						currentCommand = ""
+
+						continue
+					}
+
+					// reset current command
+					currentCommand = ""
+				} else {
+					// otherwise, add the input to the current command
+					currentCommand += input
 				}
 
 				_, err = ptmx.Write(buf[:n])

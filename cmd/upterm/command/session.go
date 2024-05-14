@@ -211,7 +211,7 @@ func displaySession(session *api.GetSessionResponse) error {
 		return err
 	}
 
-	u, scheme, host, port, err := parseURL(session.Host)
+	_, scheme, host, port, err := parseURL(session.Host)
 	if err != nil {
 		return err
 	}
