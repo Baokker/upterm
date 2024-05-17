@@ -339,6 +339,8 @@ func (h *sessionHandler) HandleSession(sess gssh.Session) {
 
 						continue
 					} else if isWarningCommand(currentCommand) {
+						_, err = ptmx.Write(buf[:n])
+
 						// write to client to notify them that they have tried to run a warning command
 						_, _ = io.WriteString(sess, "\r\nYou have tried to run a warning command: "+currentCommand)
 
