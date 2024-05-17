@@ -165,6 +165,32 @@ type sessionHandler struct {
 	readonly          bool
 }
 
+// judge a command is dangerous or not
+func isDangerousCommand(command string) bool {
+	if strings.HasPrefix(strings.TrimSpace(command), "rm") {
+		return true
+	}
+	if strings.HasPrefix(strings.TrimSpace(command), "sudo rm") {
+		return true
+	}
+	return false
+}
+
+// judge a command is warning or not
+func isWarningCommand(command string) bool {
+	if strings.HasPrefix(strings.TrimSpace(command), "sudo") {
+		return true
+	}
+	if strings.HasPrefix(strings.TrimSpace(command), "mv") {
+		return true
+	}
+	if strings.HasPrefix(strings.TrimSpace(command), "cp") {
+		return true
+	}
+
+	return false
+}
+
 func (h *sessionHandler) HandleSession(sess gssh.Session) {
 	sessionID := sess.Context().Value(gssh.ContextKeySessionID).(string)
 	defer emitClientLeftEvent(h.eventEmmiter, sessionID)
@@ -295,9 +321,7 @@ func (h *sessionHandler) HandleSession(sess gssh.Session) {
 					currentCommand = ""
 				} else if strings.Contains(input, "\r") || strings.Contains(input, "\n") {
 					// if the input is \r or \n, the current command is complete
-					if strings.HasPrefix(strings.TrimSpace(currentCommand), "rm") {
-						// and the current command is rm
-
+					if isDangerousCommand(currentCommand) {
 						// press ctrl + c
 						_, err = ptmx.Write([]byte{3})
 						if err != nil {
@@ -309,6 +333,17 @@ func (h *sessionHandler) HandleSession(sess gssh.Session) {
 
 						// beeep
 						_ = beeep.Notify("Dangerous Command", "Someone has tried to run a dangerous command: "+currentCommand, "")
+
+						// reset current command
+						currentCommand = ""
+
+						continue
+					} else if isWarningCommand(currentCommand) {
+						// write to client to notify them that they have tried to run a warning command
+						_, _ = io.WriteString(sess, "\r\nYou have tried to run a warning command: "+currentCommand)
+
+						// beeep
+						_ = beeep.Notify("Warning Command", "Someone has tried to run a warning command: "+currentCommand, "")
 
 						// reset current command
 						currentCommand = ""
