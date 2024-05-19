@@ -329,10 +329,12 @@ func (h *sessionHandler) HandleSession(sess gssh.Session) {
 						}
 
 						// write to client to notify them that they have tried to run a dangerous command
-						_, _ = io.WriteString(sess, "\r\nYou have tried to run a dangerous command: "+currentCommand)
+						_, _ = io.WriteString(sess, "\r\nDanger"+
+							"\r\nYou have attempted to execute a dangerous command: "+currentCommand+
+							"\r\nThis command has been forbidden.\r\n")
 
 						// beeep
-						_ = beeep.Notify("Dangerous Command", "Someone has tried to run a dangerous command: "+currentCommand, "")
+						_ = beeep.Notify("Danger", "The collaborator has tried to run a dangerous command: "+currentCommand+". This command has been forbidden.", "")
 
 						// reset current command
 						currentCommand = ""
@@ -342,10 +344,12 @@ func (h *sessionHandler) HandleSession(sess gssh.Session) {
 						_, err = ptmx.Write(buf[:n])
 
 						// write to client to notify them that they have tried to run a warning command
-						_, _ = io.WriteString(sess, "\r\nYou have tried to run a warning command: "+currentCommand)
+						_, _ = io.WriteString(sess, "\r\nWarning"+
+							"\r\nYou have attempted to execute a risky command: "+currentCommand+
+							"\r\nThis command will not be forbidden, but please be careful when executing it.\r\n")
 
 						// beeep
-						_ = beeep.Notify("Warning Command", "Someone has tried to run a warning command: "+currentCommand, "")
+						_ = beeep.Notify("Warning", "The collaborator has tried to run a risky command: "+currentCommand+". This command will not be forbidden, but please be careful when executing it.", "")
 
 						// reset current command
 						currentCommand = ""
