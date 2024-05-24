@@ -223,11 +223,13 @@ func shareRunE(c *cobra.Command, args []string) error {
 }
 
 func clientJoinedCallback(c *api.Client) {
-	_ = beeep.Notify("Client Joined", notifyBody(c), "")
+	//_ = beeep.Notify("Client Joined", notifyBody(c), "")
+	_ = beeep.Notify("Client Joined", "A new client has joined the shared terminal session", "")
 }
 
 func clientLeftCallback(c *api.Client) {
-	_ = beeep.Notify("Client Left", notifyBody(c), "")
+	//_ = beeep.Notify("Client Left", notifyBody(c), "")
+	_ = beeep.Notify("Client Left", "A client has left the shared terminal session", "")
 }
 
 func notifyBody(c *api.Client) string {
