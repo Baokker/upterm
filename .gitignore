@@ -6,3 +6,5 @@ release
 *.tfstate.backup
 dist
 bin
+
+.DS_Store
