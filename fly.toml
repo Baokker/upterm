@@ -31,7 +31,7 @@ grace_period = "5s"
 
 [[services]]
 protocol = "tcp"
-internal_port = 8080
+internal_port = 8090
 auto_stop_machines = false
 auto_start_machines = true
 min_machines_running = 3

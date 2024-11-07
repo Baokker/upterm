@@ -23,7 +23,7 @@ func main() {
 
 	os.Setenv("UPTERMD_NODE_ADDR", fmt.Sprintf("%s.vm.%s.internal:2222", flyMachineID, flyAppName))
 	os.Setenv("UPTERMD_SSH_ADDR", "0.0.0.0:2222")
-	os.Setenv("UPTERMD_WS_ADDR", "0.0.0.0:8080")
+	os.Setenv("UPTERMD_WS_ADDR", "0.0.0.0:8090")
 	os.Setenv("UPTERMD_HOSTNAME", "uptermd.upterm.dev")
 
 	if err := command.Root(logger).Execute(); err != nil {
