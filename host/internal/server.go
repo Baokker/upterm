@@ -3,13 +3,15 @@ package internal
 import (
 	"context"
 	"fmt"
-	"github.com/gen2brain/beeep"
 	"io"
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/gen2brain/beeep"
 
 	gssh "github.com/charmbracelet/ssh"
 	"github.com/owenthereal/upterm/host/api"
@@ -24,6 +26,25 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+type FileAccessMonitor struct {
+	ProjectRoot string
+	Logger      log.FieldLogger
+}
+
+func (m *FileAccessMonitor) Check(path string) bool {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		m.Logger.Warnf("Invalid path: %s", path)
+		return false
+	}
+
+	if !strings.HasPrefix(absPath, m.ProjectRoot) {
+		m.Logger.Warnf("Blocked external access: %s", absPath)
+		return false
+	}
+	return true
+}
+
 type Server struct {
 	Command           []string
 	CommandEnv        []string
@@ -36,6 +57,52 @@ type Server struct {
 	Stdout            *os.File
 	Logger            log.FieldLogger
 	ReadOnly          bool
+}
+
+// 获取项目根目录
+func getProjectRoot() (string, error) {
+	return os.Getwd()
+}
+
+// 增强型命令验证
+func validateCommandSafety(cmdLine string, projectRoot string) bool {
+	// 检查是否包含改变目录到外部的命令
+	if strings.Contains(cmdLine, "cd ") {
+		parts := strings.Split(cmdLine, "cd ")
+		if len(parts) > 1 {
+			targetDir := strings.TrimSpace(parts[1])
+			if !isPathInProject(targetDir, projectRoot) {
+				return false
+			}
+		}
+	}
+
+	// 检查文件操作命令
+	fileCommands := []string{"cat ", "vim ", "less ", "head ", "tail ", "nano ", "cp ", "mv ", "rm ", "touch "}
+	for _, cmd := range fileCommands {
+		if strings.HasPrefix(cmdLine, cmd) {
+			parts := strings.Fields(cmdLine)
+			if len(parts) > 1 {
+				filePath := parts[1]
+				if !isPathInProject(filePath, projectRoot) {
+					return false
+				}
+			}
+		}
+	}
+
+	// 检查重定向操作
+	if strings.Contains(cmdLine, ">") || strings.Contains(cmdLine, ">>") {
+		parts := strings.Split(cmdLine, ">")
+		if len(parts) > 1 {
+			filePath := strings.TrimSpace(parts[1])
+			if !isPathInProject(filePath, projectRoot) {
+				return false
+			}
+		}
+	}
+
+	return true
 }
 
 func (s *Server) ServeWithContext(ctx context.Context, l net.Listener) error {
@@ -163,15 +230,27 @@ type sessionHandler struct {
 	ctx               context.Context
 	logger            log.FieldLogger
 	readonly          bool
+	projectRoot       string
 }
 
 // judge a command is dangerous or not
-func isDangerousCommand(command string) bool {
-	if strings.HasPrefix(strings.TrimSpace(command), "rm") {
-		return true
+func isDangerousCommand(command, projectRoot string) bool {
+	// 检查是否尝试访问外部路径
+	if strings.Contains(command, "..") {
+		parts := strings.Fields(command)
+		for _, part := range parts {
+			if !isPathInProject(part, projectRoot) {
+				return true
+			}
+		}
 	}
-	if strings.HasPrefix(strings.TrimSpace(command), "sudo rm") {
-		return true
+
+	// 原有危险命令检测
+	dangerousPrefixes := []string{"rm ", "sudo rm ", "dd ", "mkfs ", "chmod ", "chown "}
+	for _, prefix := range dangerousPrefixes {
+		if strings.HasPrefix(strings.TrimSpace(command), prefix) {
+			return true
+		}
 	}
 	return false
 }
@@ -192,6 +271,19 @@ func isWarningCommand(command string) bool {
 }
 
 func (h *sessionHandler) HandleSession(sess gssh.Session) {
+	// 获取项目根目录
+	projectRoot, err := getProjectRoot()
+	if err != nil {
+		h.logger.Errorf("Failed to get project root: %v", err)
+		return
+	}
+	h.projectRoot = projectRoot
+
+	// 显示安全提示
+	_, _ = io.WriteString(sess, "\r\n=== SECURITY NOTICE ===")
+	_, _ = io.WriteString(sess, "\r\nYou are restricted to: "+projectRoot)
+	_, _ = io.WriteString(sess, "\r\nExternal file access is blocked\r\n\r\n")
+
 	sessionID := sess.Context().Value(gssh.ContextKeySessionID).(string)
 	defer emitClientLeftEvent(h.eventEmmiter, sessionID)
 
@@ -203,7 +295,6 @@ func (h *sessionHandler) HandleSession(sess gssh.Session) {
 
 	var (
 		g    run.Group
-		err  error
 		ptmx = h.ptmx
 	)
 
@@ -297,11 +388,7 @@ func (h *sessionHandler) HandleSession(sess gssh.Session) {
 		// input
 		ctx, cancel := context.WithCancel(h.ctx)
 		g.Add(func() error {
-			// previous
-			//_, err := io.Copy(ptmx, uio.NewContextReader(ctx, sess))
-			//return err
 
-			// new
 			reader := uio.NewContextReader(ctx, sess)
 			var currentCommand string
 			for {
@@ -312,6 +399,20 @@ func (h *sessionHandler) HandleSession(sess gssh.Session) {
 				}
 
 				input := string(buf[:n])
+				currentCommand += input
+
+				// 检查命令是否安全
+				if strings.Contains(input, "\r") || strings.Contains(input, "\n") {
+					if !validateCommandSafety(currentCommand, h.projectRoot) {
+						// 阻止命令并通知
+						_, _ = ptmx.Write([]byte{3}) // 发送 Ctrl+C
+						_, _ = sess.Write([]byte("\r\nSECURITY ALERT: Access outside project directory blocked\r\n"))
+						_ = beeep.Notify("Security Alert", "Blocked external path access", "")
+						currentCommand = ""
+						continue
+					}
+					currentCommand = ""
+				}
 
 				if strings.Contains(input, "\x7f") && len(currentCommand) > 0 {
 					// if input is backspace, remove the last character from the current command
@@ -321,7 +422,7 @@ func (h *sessionHandler) HandleSession(sess gssh.Session) {
 					currentCommand = ""
 				} else if strings.Contains(input, "\r") || strings.Contains(input, "\n") {
 					// if the input is \r or \n, the current command is complete
-					if isDangerousCommand(currentCommand) {
+					if isDangerousCommand(currentCommand, h.projectRoot) {
 						// press ctrl + c
 						_, err = ptmx.Write([]byte{3})
 						if err != nil {
