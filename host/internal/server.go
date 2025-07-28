@@ -12,6 +12,7 @@ import (
 	"time"
 
 	gssh "github.com/charmbracelet/ssh"
+	"github.com/kballard/go-shellquote"
 	"github.com/owenthereal/upterm/host/api"
 	"github.com/owenthereal/upterm/server"
 	"github.com/owenthereal/upterm/upterm"
@@ -24,63 +25,133 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// 命令安全等级表
+// ---------- 命令风险等级 ----------
 var commandRiskMap = map[string]string{
-	// dangerous
-	"rm":       "dangerous",
-	"dd":       "dangerous",
-	"mkfs":     "dangerous",
-	"reboot":   "dangerous",
-	"shutdown": "dangerous",
-	"init":     "dangerous",
-	"telinit":  "dangerous",
-	"poweroff": "dangerous",
-	"halt":     "dangerous",
-	"fdisk":    "dangerous",
-	"wipefs":   "dangerous",
-	"ddrescue": "dangerous",
+	"rm": "dangerous", "dd": "dangerous", "mkfs": "dangerous",
+	"reboot": "dangerous", "shutdown": "dangerous", "init": "dangerous",
+	"telinit": "dangerous", "poweroff": "dangerous", "halt": "dangerous",
+	"fdisk": "dangerous", "wipefs": "dangerous", "ddrescue": "dangerous",
+	"sudo": "risky", "mv": "risky", "cp": "risky", "chmod": "risky",
+	"chown": "risky", "mount": "risky", "umount": "risky",
+	"curl": "risky", "wget": "risky", "apt": "risky", "yum": "risky", "dnf": "risky",
+}
 
-	// risky
-	"sudo":   "risky",
-	"mv":     "risky",
-	"cp":     "risky",
-	"chmod":  "risky",
-	"chown":  "risky",
-	"mount":  "risky",
-	"umount": "risky",
-	"curl":   "risky",
-	"wget":   "risky",
-	"apt":    "risky",
-	"yum":    "risky",
-	"dnf":    "risky",
+// ---------- 环境变量白名单 ----------
+var allowedEnvVars = map[string]bool{
+	"HOME": true, "PWD": true, "USER": true, "LOGNAME": true,
+	"SHELL": true, "TERM": true, "TMPDIR": true,
+}
+
+// ---------- 工具函数 ----------
+func baseCommand(cmd string) string {
+	fields, _ := shellquote.Split(cmd)
+	if len(fields) == 0 {
+		return ""
+	}
+	return filepath.Base(fields[0])
+}
+
+func expandAllowedEnvVars(input string) string {
+	return os.Expand(input, func(key string) string {
+		if allowedEnvVars[key] {
+			return os.Getenv(key)
+		}
+		return ""
+	})
+}
+
+func normalizePath(input, projectRoot string) (string, bool) {
+	input = strings.TrimRight(input, "\r") // 去除 Windows 换行符
+	if strings.Contains(input, "\x00") {
+		return "", false
+	}
+
+	input = expandAllowedEnvVars(input)
+	if strings.HasPrefix(input, "~") {
+		if home, ok := os.LookupEnv("HOME"); ok {
+			input = strings.Replace(input, "~", home, 1)
+		} else {
+			return "", false
+		}
+	}
+
+	abs, err := filepath.Abs(input)
+	if err != nil {
+		return "", false
+	}
+
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", false
+	}
+	resolved = filepath.Clean(resolved)
+
+	if !strings.HasPrefix(resolved, projectRoot) {
+		return "", false
+	}
+	return resolved, true
+}
+
+func extractPathsFromCommand(cmd string) []string {
+	args, err := shellquote.Split(cmd)
+	if err != nil || len(args) == 0 {
+		return nil
+	}
+	var paths []string
+	base := strings.ToLower(baseCommand(cmd))
+
+	switch base {
+	case "rm", "mv", "cp", "chmod", "chown", "touch", "cat", "ls",
+		"mkdir", "rmdir", "nano", "vim", "emacs", "truncate", "tee", "install":
+		for _, arg := range args[1:] {
+			if !strings.HasPrefix(arg, "-") {
+				paths = append(paths, arg)
+			}
+		}
+	case "curl":
+		for i, arg := range args {
+			if (arg == "-o" || arg == "--output") && i+1 < len(args) {
+				paths = append(paths, args[i+1])
+			}
+		}
+	case "wget":
+		for i, arg := range args {
+			if arg == "-O" && i+1 < len(args) {
+				paths = append(paths, args[i+1])
+			}
+		}
+	}
+
+	redirs := map[string]bool{">": true, ">>": true, "<": true, "<<": true}
+	for i := 0; i < len(args)-1; i++ {
+		if redirs[args[i]] && !strings.HasPrefix(args[i+1], "-") {
+			paths = append(paths, args[i+1])
+		}
+	}
+	for _, tok := range args[1:] {
+		if (strings.Contains(tok, "/") || strings.HasPrefix(tok, ".")) &&
+			!strings.HasPrefix(tok, "-") {
+			paths = append(paths, tok)
+		}
+	}
+	return paths
 }
 
 func getCommandRisk(cmd string) string {
-	fields := strings.Fields(cmd)
-	if len(fields) == 0 {
-		return "secure"
-	}
-	base := strings.ToLower(fields[0])
+	base := strings.ToLower(baseCommand(cmd))
 	if risk, ok := commandRiskMap[base]; ok {
 		return risk
 	}
 	return "secure"
 }
 
-// evaluateCommand 统一评估命令风险
-// 返回 risk 等级(dangerous|risky|secure) 以及 是否应该拦截
 func evaluateCommand(cmd, projectRoot string) (risk string, shouldBlock bool) {
-	// 1. 路径越界检查
-	if strings.Contains(cmd, "..") {
-		parts := strings.Fields(cmd)
-		for _, part := range parts {
-			if !isPathInProject(part, projectRoot) {
-				return "dangerous", true
-			}
+	for _, p := range extractPathsFromCommand(cmd) {
+		_, ok := normalizePath(p, projectRoot)
+		if !ok {
+			return "dangerous", true
 		}
 	}
-
-	// 2. 命令风险等级
 	risk = getCommandRisk(cmd)
 	switch risk {
 	case "dangerous":
@@ -92,23 +163,29 @@ func evaluateCommand(cmd, projectRoot string) (risk string, shouldBlock bool) {
 	}
 }
 
+// ---------- 项目根目录 ----------
+func getProjectRoot() (string, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	abs, err := filepath.Abs(wd)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(abs), nil
+}
+
+// ---------- 其余结构体 & 方法（未改动） ----------
+
 type FileAccessMonitor struct {
 	ProjectRoot string
 	Logger      log.FieldLogger
 }
 
 func (m *FileAccessMonitor) Check(path string) bool {
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		m.Logger.Warnf("Invalid path: %s", path)
-		return false
-	}
-
-	if !strings.HasPrefix(absPath, m.ProjectRoot) {
-		m.Logger.Warnf("Blocked external access: %s", absPath)
-		return false
-	}
-	return true
+	_, ok := normalizePath(path, m.ProjectRoot)
+	return ok
 }
 
 type Server struct {
@@ -125,16 +202,11 @@ type Server struct {
 	ReadOnly          bool
 }
 
-// 获取项目根目录
-func getProjectRoot() (string, error) {
-	return os.Getwd()
-}
-
 func (s *Server) ServeWithContext(ctx context.Context, l net.Listener) error {
 	writers := uio.NewMultiWriter(5)
-
 	cmdCtx, cmdCancel := context.WithCancel(ctx)
 	defer cmdCancel()
+
 	cmd := newCommand(
 		s.Command[0],
 		s.Command[1:],
@@ -204,13 +276,10 @@ func (s *Server) ServeWithContext(ctx context.Context, l net.Listener) error {
 		g.Add(func() error {
 			return server.Serve(l)
 		}, func(err error) {
-			// kill ssh sessionHandler
 			cancel()
-			// shut down ssh server
 			_ = server.Shutdown(ctx)
 		})
 	}
-
 	return g.Run()
 }
 
@@ -227,21 +296,16 @@ func (h *publicKeyHandler) HandlePublicKey(ctx gssh.Context, key gssh.PublicKey)
 		h.Logger.WithError(err).Error("error parsing auth request from cert")
 		return false
 	}
-
-	// TODO: sshproxy already rejects unauthorized keys
-	// Does host still need to check them?
 	if len(h.AuthorizedKeys) == 0 {
 		emitClientJoinEvent(h.EventEmmiter, ctx.SessionID(), auth, pk)
 		return true
 	}
-
 	for _, k := range h.AuthorizedKeys {
 		if utils.KeysEqual(k, pk) {
 			emitClientJoinEvent(h.EventEmmiter, ctx.SessionID(), auth, pk)
 			return true
 		}
 	}
-
 	h.Logger.Info("unauthorized public key")
 	return false
 }
@@ -259,7 +323,6 @@ type sessionHandler struct {
 }
 
 func (h *sessionHandler) HandleSession(sess gssh.Session) {
-	// 获取项目根目录
 	projectRoot, err := getProjectRoot()
 	if err != nil {
 		h.logger.Errorf("Failed to get project root: %v", err)
@@ -267,7 +330,6 @@ func (h *sessionHandler) HandleSession(sess gssh.Session) {
 	}
 	h.projectRoot = projectRoot
 
-	// 显示安全提示
 	_, _ = io.WriteString(sess, "\r\n=== SECURITY NOTICE ===")
 	_, _ = io.WriteString(sess, "\r\nYou are restricted to: "+projectRoot)
 	_, _ = io.WriteString(sess, "\r\nExternal file access is blocked\r\n\r\n")
@@ -286,13 +348,11 @@ func (h *sessionHandler) HandleSession(sess gssh.Session) {
 		ptmx = h.ptmx
 	)
 
-	// simulate openssh keepalive
 	{
 		ctx, cancel := context.WithCancel(h.ctx)
 		g.Add(func() error {
 			ticker := time.NewTicker(h.keepAliveDuration)
 			defer ticker.Stop()
-
 			for {
 				select {
 				case <-ticker.C:
@@ -338,7 +398,6 @@ func (h *sessionHandler) HandleSession(sess gssh.Session) {
 	}
 
 	{
-		// pty
 		ctx, cancel := context.WithCancel(h.ctx)
 		tee := terminalEventEmitter{h.eventEmmiter}
 		g.Add(func() error {
@@ -356,15 +415,11 @@ func (h *sessionHandler) HandleSession(sess gssh.Session) {
 		})
 	}
 
-	// if a readonly session has been requested, don't connect stdin
 	if h.readonly {
-		// write to client to notify them that they have connected to a read-only session
 		_, _ = io.WriteString(sess, "\r\n=== Attached to read-only session ===\r\n\r\n")
 	} else {
-		// input
 		ctx, cancel := context.WithCancel(h.ctx)
 		g.Add(func() error {
-
 			reader := uio.NewContextReader(ctx, sess)
 			var currentCommand string
 			for {
@@ -377,32 +432,26 @@ func (h *sessionHandler) HandleSession(sess gssh.Session) {
 				input := string(buf[:n])
 				currentCommand += input
 
-				// 检查命令是否安全
 				if strings.Contains(input, "\r") || strings.Contains(input, "\n") {
 					risk, shouldBlock := evaluateCommand(currentCommand, h.projectRoot)
-
-					if shouldBlock && risk == "dangerous" {
-						// 路径越界或危险命令
-						_, _ = ptmx.Write([]byte{3}) // Ctrl+C
+					if shouldBlock {
+						_, _ = ptmx.Write([]byte{3})
 						_, _ = sess.Write([]byte(fmt.Sprintf(
-							"\r\nSECURITY BLOCKED: %s\r\n", currentCommand)))
+							"\r\nSECURITY BLOCKED: %s\r\n", strings.TrimSpace(currentCommand))))
 						currentCommand = ""
 						continue
 					}
-
 					if risk == "risky" {
-						// 风险命令，仅终端提示后放行
 						_, _ = sess.Write([]byte(fmt.Sprintf(
-							"\r\nWARNING: Risky command: %s\r\n", currentCommand)))
+							"\r\nWARNING: Risky command: %s\r\n", strings.TrimSpace(currentCommand))))
 					}
-
-					// 安全命令或风险命令放行
 					currentCommand = ""
 				} else if strings.Contains(input, "\x7f") && len(currentCommand) > 0 {
 					currentCommand = currentCommand[:len(currentCommand)-1]
 				} else if strings.Contains(input, "\x03") {
 					currentCommand = ""
 				}
+
 				_, err = ptmx.Write(buf[:n])
 				if err != nil {
 					return err
