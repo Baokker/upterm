@@ -11,8 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gen2brain/beeep"
-
 	gssh "github.com/charmbracelet/ssh"
 	"github.com/owenthereal/upterm/host/api"
 	"github.com/owenthereal/upterm/server"
@@ -25,6 +23,74 @@ import (
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/crypto/ssh"
 )
+
+// 命令安全等级表
+var commandRiskMap = map[string]string{
+	// dangerous
+	"rm":       "dangerous",
+	"dd":       "dangerous",
+	"mkfs":     "dangerous",
+	"reboot":   "dangerous",
+	"shutdown": "dangerous",
+	"init":     "dangerous",
+	"telinit":  "dangerous",
+	"poweroff": "dangerous",
+	"halt":     "dangerous",
+	"fdisk":    "dangerous",
+	"wipefs":   "dangerous",
+	"ddrescue": "dangerous",
+
+	// risky
+	"sudo":   "risky",
+	"mv":     "risky",
+	"cp":     "risky",
+	"chmod":  "risky",
+	"chown":  "risky",
+	"mount":  "risky",
+	"umount": "risky",
+	"curl":   "risky",
+	"wget":   "risky",
+	"apt":    "risky",
+	"yum":    "risky",
+	"dnf":    "risky",
+}
+
+func getCommandRisk(cmd string) string {
+	fields := strings.Fields(cmd)
+	if len(fields) == 0 {
+		return "secure"
+	}
+	base := strings.ToLower(fields[0])
+	if risk, ok := commandRiskMap[base]; ok {
+		return risk
+	}
+	return "secure"
+}
+
+// evaluateCommand 统一评估命令风险
+// 返回 risk 等级(dangerous|risky|secure) 以及 是否应该拦截
+func evaluateCommand(cmd, projectRoot string) (risk string, shouldBlock bool) {
+	// 1. 路径越界检查
+	if strings.Contains(cmd, "..") {
+		parts := strings.Fields(cmd)
+		for _, part := range parts {
+			if !isPathInProject(part, projectRoot) {
+				return "dangerous", true
+			}
+		}
+	}
+
+	// 2. 命令风险等级
+	risk = getCommandRisk(cmd)
+	switch risk {
+	case "dangerous":
+		return "dangerous", true
+	case "risky":
+		return "risky", false
+	default:
+		return "secure", false
+	}
+}
 
 type FileAccessMonitor struct {
 	ProjectRoot string
@@ -62,47 +128,6 @@ type Server struct {
 // 获取项目根目录
 func getProjectRoot() (string, error) {
 	return os.Getwd()
-}
-
-// 增强型命令验证
-func validateCommandSafety(cmdLine string, projectRoot string) bool {
-	// 检查是否包含改变目录到外部的命令
-	if strings.Contains(cmdLine, "cd ") {
-		parts := strings.Split(cmdLine, "cd ")
-		if len(parts) > 1 {
-			targetDir := strings.TrimSpace(parts[1])
-			if !isPathInProject(targetDir, projectRoot) {
-				return false
-			}
-		}
-	}
-
-	// 检查文件操作命令
-	fileCommands := []string{"cat ", "vim ", "less ", "head ", "tail ", "nano ", "cp ", "mv ", "rm ", "touch "}
-	for _, cmd := range fileCommands {
-		if strings.HasPrefix(cmdLine, cmd) {
-			parts := strings.Fields(cmdLine)
-			if len(parts) > 1 {
-				filePath := parts[1]
-				if !isPathInProject(filePath, projectRoot) {
-					return false
-				}
-			}
-		}
-	}
-
-	// 检查重定向操作
-	if strings.Contains(cmdLine, ">") || strings.Contains(cmdLine, ">>") {
-		parts := strings.Split(cmdLine, ">")
-		if len(parts) > 1 {
-			filePath := strings.TrimSpace(parts[1])
-			if !isPathInProject(filePath, projectRoot) {
-				return false
-			}
-		}
-	}
-
-	return true
 }
 
 func (s *Server) ServeWithContext(ctx context.Context, l net.Listener) error {
@@ -233,43 +258,6 @@ type sessionHandler struct {
 	projectRoot       string
 }
 
-// judge a command is dangerous or not
-func isDangerousCommand(command, projectRoot string) bool {
-	// 检查是否尝试访问外部路径
-	if strings.Contains(command, "..") {
-		parts := strings.Fields(command)
-		for _, part := range parts {
-			if !isPathInProject(part, projectRoot) {
-				return true
-			}
-		}
-	}
-
-	// 原有危险命令检测
-	dangerousPrefixes := []string{"rm ", "sudo rm ", "dd ", "mkfs ", "chmod ", "chown "}
-	for _, prefix := range dangerousPrefixes {
-		if strings.HasPrefix(strings.TrimSpace(command), prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-// judge a command is warning or not
-func isWarningCommand(command string) bool {
-	if strings.HasPrefix(strings.TrimSpace(command), "sudo") {
-		return true
-	}
-	if strings.HasPrefix(strings.TrimSpace(command), "mv") {
-		return true
-	}
-	if strings.HasPrefix(strings.TrimSpace(command), "cp") {
-		return true
-	}
-
-	return false
-}
-
 func (h *sessionHandler) HandleSession(sess gssh.Session) {
 	// 获取项目根目录
 	projectRoot, err := getProjectRoot()
@@ -321,43 +309,31 @@ func (h *sessionHandler) HandleSession(sess gssh.Session) {
 	}
 
 	if len(h.forceCommand) > 0 {
-		var cmd *exec.Cmd
-
 		ctx, cancel := context.WithCancel(h.ctx)
 		defer cancel()
-
-		cmd, ptmx, err = startAttachCmd(ctx, h.forceCommand, ptyReq.Term)
+		cmd, ptmx2, err := startAttachCmd(ctx, h.forceCommand, ptyReq.Term)
 		if err != nil {
 			h.logger.WithError(err).Error("error starting force command")
 			_ = sess.Exit(1)
 			return
 		}
-
-		{
-			// reattach output
-			g.Add(func() error {
-				_, err := io.Copy(sess, uio.NewContextReader(ctx, ptmx))
-				return ptyError(err)
-			}, func(err error) {
-				cancel()
-				ptmx.Close()
-			})
-		}
-		{
-			g.Add(func() error {
-				return cmd.Wait()
-			}, func(err error) {
-				cancel()
-				ptmx.Close()
-			})
-		}
+		ptmx = ptmx2
+		g.Add(func() error {
+			_, err := io.Copy(sess, uio.NewContextReader(ctx, ptmx))
+			return ptyError(err)
+		}, func(err error) {
+			cancel()
+			ptmx.Close()
+		})
+		g.Add(func() error { return cmd.Wait() }, func(err error) {
+			cancel()
+			ptmx.Close()
+		})
 	} else {
-		// output
 		if err := h.writers.Append(sess); err != nil {
 			_ = sess.Exit(1)
 			return
 		}
-
 		defer h.writers.Remove(sess)
 	}
 
@@ -403,76 +379,36 @@ func (h *sessionHandler) HandleSession(sess gssh.Session) {
 
 				// 检查命令是否安全
 				if strings.Contains(input, "\r") || strings.Contains(input, "\n") {
-					if !validateCommandSafety(currentCommand, h.projectRoot) {
-						// 阻止命令并通知
-						_, _ = ptmx.Write([]byte{3}) // 发送 Ctrl+C
-						_, _ = sess.Write([]byte("\r\nSECURITY ALERT: Access outside project directory blocked\r\n"))
-						_ = beeep.Notify("Security Alert", "Blocked external path access", "")
+					risk, shouldBlock := evaluateCommand(currentCommand, h.projectRoot)
+
+					if shouldBlock && risk == "dangerous" {
+						// 路径越界或危险命令
+						_, _ = ptmx.Write([]byte{3}) // Ctrl+C
+						_, _ = sess.Write([]byte(fmt.Sprintf(
+							"\r\nSECURITY BLOCKED: %s\r\n", currentCommand)))
 						currentCommand = ""
 						continue
 					}
-					currentCommand = ""
-				}
 
-				if strings.Contains(input, "\x7f") && len(currentCommand) > 0 {
-					// if input is backspace, remove the last character from the current command
+					if risk == "risky" {
+						// 风险命令，仅终端提示后放行
+						_, _ = sess.Write([]byte(fmt.Sprintf(
+							"\r\nWARNING: Risky command: %s\r\n", currentCommand)))
+					}
+
+					// 安全命令或风险命令放行
+					currentCommand = ""
+				} else if strings.Contains(input, "\x7f") && len(currentCommand) > 0 {
 					currentCommand = currentCommand[:len(currentCommand)-1]
 				} else if strings.Contains(input, "\x03") {
-					// if input is ctrl + c, clear the current command
 					currentCommand = ""
-				} else if strings.Contains(input, "\r") || strings.Contains(input, "\n") {
-					// if the input is \r or \n, the current command is complete
-					if isDangerousCommand(currentCommand, h.projectRoot) {
-						// press ctrl + c
-						_, err = ptmx.Write([]byte{3})
-						if err != nil {
-							return err
-						}
-
-						// write to client to notify them that they have tried to run a dangerous command
-						_, _ = io.WriteString(sess, "\r\nDanger"+
-							"\r\nYou have attempted to execute a dangerous command: "+currentCommand+
-							"\r\nThis command has been forbidden.\r\n")
-
-						// beeep
-						_ = beeep.Notify("Danger", "The collaborator has tried to run a dangerous command: "+currentCommand+". This command has been forbidden.", "")
-
-						// reset current command
-						currentCommand = ""
-
-						continue
-					} else if isWarningCommand(currentCommand) {
-						_, err = ptmx.Write(buf[:n])
-
-						// write to client to notify them that they have tried to run a warning command
-						_, _ = io.WriteString(sess, "\r\nWarning"+
-							"\r\nYou have attempted to execute a risky command: "+currentCommand+
-							"\r\nThis command will not be forbidden, but please be careful when executing it.\r\n")
-
-						// beeep
-						_ = beeep.Notify("Warning", "The collaborator has tried to run a risky command: "+currentCommand+". This command will not be forbidden, but please be careful when executing it.", "")
-
-						// reset current command
-						currentCommand = ""
-
-						continue
-					}
-
-					// reset current command
-					currentCommand = ""
-				} else {
-					// otherwise, add the input to the current command
-					currentCommand += input
 				}
-
 				_, err = ptmx.Write(buf[:n])
 				if err != nil {
 					return err
 				}
 			}
-		}, func(err error) {
-			cancel()
-		})
+		}, func(err error) { cancel() })
 	}
 
 	if err := g.Run(); err != nil {
@@ -504,6 +440,5 @@ func startAttachCmd(ctx context.Context, c []string, term string) (*exec.Cmd, *p
 	cmd := exec.CommandContext(ctx, c[0], c[1:]...)
 	cmd.Env = append(os.Environ(), fmt.Sprintf("TERM=%s", term))
 	pty, err := startPty(cmd)
-
 	return cmd, pty, err
 }
