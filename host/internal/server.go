@@ -146,7 +146,38 @@ func getCommandRisk(cmd string) string {
 }
 
 func evaluateCommand(cmd, projectRoot string) (risk string, shouldBlock bool) {
-	for _, p := range extractPathsFromCommand(cmd) {
+    // 专门处理 cd 命令
+    base := strings.ToLower(baseCommand(cmd))
+    if base == "cd" {
+        args, err := shellquote.Split(cmd)
+        if err != nil {
+            return "dangerous", true // 解析失败视为危险
+        }
+        
+        // 处理无参数情况 (cd 默认切换到 home)
+        target := ""
+        if len(args) > 1 {
+            target = args[1]
+        } else {
+            if home, ok := os.LookupEnv("HOME"); ok {
+                target = home
+            } else {
+                return "dangerous", true // 无 HOME 环境变量
+            }
+        }
+        
+        normalized, ok := normalizePath(target, projectRoot)
+        if !ok {
+            return "dangerous", true
+        }
+        
+        if strings.Contains(normalized, "..") && !strings.HasPrefix(normalized, projectRoot) {
+            return "dangerous", true
+        }
+        
+        return "secure", false
+    }
+    for _, p := range extractPathsFromCommand(cmd) {
 		_, ok := normalizePath(p, projectRoot)
 		if !ok {
 			return "dangerous", true
